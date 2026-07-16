@@ -1,0 +1,1 @@
+import http from 'node:http'; http.get('http://localhost:3000/client.js', res=>{ let d=''; res.setEncoding('utf8'); res.on('data', c=>d+=c); res.on('end', ()=>{ const i=378; console.log('chars at', i-3,i-2,i-1,i,i+1,i+2,i+3); for(let k=i-3;k<=i+3;k++){ console.log(k, d.charCodeAt(k), JSON.stringify(d[k])); } }); }).on('error', e=>console.error(e));
