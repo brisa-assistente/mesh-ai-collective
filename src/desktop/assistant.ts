@@ -1,6 +1,14 @@
 import { DesktopMeshNode } from './mesh.js';
 import { type MeshMessage, type MeshNode } from '../shared/types.js';
 
+/**
+ * Simple AI service manager that attempts to call an online AI endpoint when
+ * configured via `ONLINE_AI_URL`, falling back to a local rule-based responder.
+ *
+ * This is intentionally lightweight so it can run offline; replace or extend
+ * with a proper local model runtime if needed.
+ */
+
 export class AIServiceManager {
   async answer(prompt: string): Promise<string> {
     const onlineUrl = process.env.ONLINE_AI_URL;

@@ -6,6 +6,12 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { DesktopMeshNode, InMemoryMeshNetwork, type MeshNetworkEvent } from './mesh.js';
 import { MeshNode } from '../shared/types.js';
 
+/**
+ * Lightweight HTTP + WebSocket server that exposes a simple UI for the
+ * in-memory mesh network. Serves `/`, `/client.js` and a `/nodes` JSON
+ * endpoint; broadcasts network events to connected WebSocket clients.
+ */
+
 export async function startWebInterface(
   network: InMemoryMeshNetwork,
   nodes: DesktopMeshNode[],
