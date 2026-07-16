@@ -2,3 +2,7 @@ node_modules/
 dist/
 *.log
 .DS_Store
+# temp and editor files
+*.mjs
+temp_*
+\357\200\272*

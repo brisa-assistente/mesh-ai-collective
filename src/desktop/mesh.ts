@@ -12,7 +12,13 @@ export type MeshNetworkEvent =
   | { event: 'delivered'; message: MeshMessage }
   | { event: 'received'; message: MeshMessage; nodeId: string };
 
+/**
+ * In-memory mesh network implementation.
+ * Routes messages between registered `DesktopMeshNode` instances inside the
+ * same process and emits `message` events for observers.
+ */
 export class InMemoryMeshNetwork extends EventEmitter implements MeshNetwork {
+  [x: string]: any;
   private nodes = new Map<string, DesktopMeshNode>();
 
   registerNode(node: DesktopMeshNode): void {
@@ -50,6 +56,8 @@ export class DesktopMeshNode {
   public network: InMemoryMeshNetwork | null = null;
 
   constructor(public config: MeshNode) {}
+
+  /** Node identifier (from config.id). */
 
   get id(): string {
     return this.config.id;
