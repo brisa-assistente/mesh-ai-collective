@@ -8,6 +8,9 @@ const gatewayConfig: MeshNode = {
   name: 'Desktop Node',
   role: 'gateway',
   capabilities: ['orchestration', 'context-sharing', 'local-inference'],
+  accessPolicy: {
+    allowedRoles: ['coordinator', 'assistant'],
+  },
 };
 
 const edgeConfig: MeshNode = {
@@ -15,13 +18,31 @@ const edgeConfig: MeshNode = {
   name: 'Edge Node',
   role: 'edge',
   capabilities: ['sensor-data', 'local-processing'],
+  accessPolicy: {
+    allowedRoles: ['gateway', 'coordinator'],
+  },
 };
 
-const coordinatorConfig: MeshNode = {
+const coordinatorPrimaryConfig: MeshNode = {
   id: 'desktop-node-03',
   name: 'Coordinator Node',
   role: 'coordinator',
   capabilities: ['scheduling', 'aggregation'],
+  leadershipPriority: 100,
+  accessPolicy: {
+    allowedRoles: ['gateway', 'edge'],
+  },
+};
+
+const coordinatorBackupConfig: MeshNode = {
+  id: 'desktop-node-05',
+  name: 'Coordinator Backup Node',
+  role: 'coordinator',
+  capabilities: ['scheduling', 'aggregation'],
+  leadershipPriority: 80,
+  accessPolicy: {
+    allowedRoles: ['gateway', 'edge'],
+  },
 };
 
 const assistantConfig: MeshNode = {
@@ -29,6 +50,19 @@ const assistantConfig: MeshNode = {
   name: 'Assistant Node',
   role: 'assistant',
   capabilities: ['local-ai', 'online-ai', 'dialog'],
+  accessPolicy: {
+    allowedRoles: ['gateway', 'coordinator'],
+  },
+};
+
+const remoteControllerConfig: MeshNode = {
+  id: 'remote-node-06',
+  name: 'Remote Controller Node',
+  role: 'remote-controller',
+  capabilities: ['remote-control', 'device-access', 'screen-share'],
+  accessPolicy: {
+    allowedRoles: ['gateway', 'coordinator'],
+  },
 };
 
 async function main() {
@@ -36,24 +70,30 @@ async function main() {
 
   const gatewayNode = new DesktopMeshNode(gatewayConfig);
   const edgeNode = new DesktopMeshNode(edgeConfig);
-  const coordinatorNode = new DesktopMeshNode(coordinatorConfig);
+  const coordinatorPrimaryNode = new DesktopMeshNode(coordinatorPrimaryConfig);
+  const coordinatorBackupNode = new DesktopMeshNode(coordinatorBackupConfig);
   const assistantManager = new AIServiceManager();
   const assistantNode = new AssistantMeshNode(assistantConfig, assistantManager);
+  const remoteControllerNode = new DesktopMeshNode(remoteControllerConfig);
 
   network.registerNode(gatewayNode);
   network.registerNode(edgeNode);
-  network.registerNode(coordinatorNode);
+  network.registerNode(coordinatorPrimaryNode);
+  network.registerNode(coordinatorBackupNode);
   network.registerNode(assistantNode);
+  network.registerNode(remoteControllerNode);
 
   console.log('Mesh AI Collective desktop node initialized');
 
   gatewayNode.startHeartbeat(8000);
   edgeNode.startHeartbeat(12000);
-  coordinatorNode.startHeartbeat(15000);
+  coordinatorPrimaryNode.startHeartbeat(15000);
+  coordinatorBackupNode.startHeartbeat(15500);
   assistantNode.startHeartbeat(20000);
 
   setTimeout(() => {
-    gatewayNode.sendTask({ task: 'analyze-sensor-data', priority: 'high' }, 'desktop-node-03');
+    console.log(`Current leader: ${network.getCurrentLeaderId()}`);
+    gatewayNode.sendTask({ task: 'analyze-sensor-data', priority: 'high' }, coordinatorPrimaryConfig.id);
   }, 3000);
 
   setTimeout(() => {
@@ -61,7 +101,7 @@ async function main() {
   }, 6000);
 
   const port = 3000;
-  await startWebInterface(network, [gatewayNode, edgeNode, coordinatorNode, assistantNode], port);
+  await startWebInterface(network, [gatewayNode, edgeNode, coordinatorPrimaryNode, coordinatorBackupNode, assistantNode, remoteControllerNode], port);
   console.log(`Web interface available at http://localhost:${port}`);
 }
 

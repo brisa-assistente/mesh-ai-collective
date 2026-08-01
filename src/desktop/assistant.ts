@@ -2,17 +2,21 @@ import { DesktopMeshNode } from './mesh.js';
 import { type MeshMessage, type MeshNode } from '../shared/types.js';
 
 /**
- * Simple AI service manager that attempts to call an online AI endpoint when
- * configured via `ONLINE_AI_URL`, falling back to a local rule-based responder.
- *
- * This is intentionally lightweight so it can run offline; replace or extend
- * with a proper local model runtime if needed.
+ * AI service manager that prefers a local Ollama instance when enabled,
+ * falls back to an online model endpoint if configured, and otherwise uses
+ * a lightweight offline rule-based responder.
  */
-
 export class AIServiceManager {
   async answer(prompt: string): Promise<string> {
-    const onlineUrl = process.env.ONLINE_AI_URL;
+    const localOllamaEnabled = this.shouldUseLocalOllama();
+    if (localOllamaEnabled) {
+      const ollamaResponse = await this.ollamaAnswer(prompt);
+      if (ollamaResponse) {
+        return ollamaResponse;
+      }
+    }
 
+    const onlineUrl = process.env.ONLINE_AI_URL;
     if (onlineUrl) {
       try {
         const response = await fetch(onlineUrl, {
@@ -53,6 +57,79 @@ export class AIServiceManager {
     return this.localAnswer(prompt);
   }
 
+  async answerAudio(payload: { mime: string; data: string } | string): Promise<string> {
+    if (typeof payload === 'string') {
+      return this.answer(payload);
+    }
+
+    if (process.env.AUDIO_TRANSCRIPTION_URL) {
+      try {
+        const response = await fetch(process.env.AUDIO_TRANSCRIPTION_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mime: payload.mime,
+            data: payload.data,
+          }),
+        });
+
+        if (!response.ok) {
+          return `Transcription service error: ${response.status} ${response.statusText}`;
+        }
+
+        const data = await response.json();
+        if (typeof data.transcript === 'string') {
+          return data.transcript;
+        }
+
+        return `Transcription service returned unexpected result: ${JSON.stringify(data)}`;
+      } catch (error) {
+        return `Transcription failed: ${String(error)}`;
+      }
+    }
+
+    return `Áudio recebido (${payload.mime}); transcrição não configurada.`;
+  }
+
+  private shouldUseLocalOllama(): boolean {
+    const configuredValue = process.env.USE_OLLAMA;
+    if (configuredValue === '0' || configuredValue === 'false') {
+      return false;
+    }
+
+    if (configuredValue === '1' || configuredValue === 'true') {
+      return true;
+    }
+
+    return true;
+  }
+
+  private async ollamaAnswer(prompt: string): Promise<string | null> {
+    const model = process.env.OLLAMA_MODEL ?? 'llama3.2:latest';
+    const ollamaUrl = process.env.OLLAMA_URL ?? 'http://127.0.0.1:11434';
+
+    try {
+      const response = await fetch(`${ollamaUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          stream: false,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+      });
+
+      if (!response.ok) {
+        return null;
+      }
+
+      const data = await response.json() as { message?: { content?: string } };
+      return typeof data.message?.content === 'string' ? data.message.content : null;
+    } catch {
+      return null;
+    }
+  }
+
   localAnswer(prompt: string): string {
     const normalized = prompt.toLowerCase().trim();
     const sentences = normalized.split(/[.?!]+/).map((s) => s.trim()).filter(Boolean);
@@ -91,24 +168,41 @@ export class AssistantMeshNode extends DesktopMeshNode {
       console.log(`\n[${this.id}] Assistant query received from ${message.from}`);
       const queryText = typeof message.payload === 'string' ? message.payload : JSON.stringify(message.payload);
       this.aiService.answer(queryText)
-        .then((response) => {
-          const responseMessage: MeshMessage = {
-            from: this.id,
-            to: message.from,
-            type: 'assistant-response',
-            payload: response,
-            timestamp: new Date().toISOString(),
-          };
-          if (this.network) {
-            this.network.send(responseMessage);
-          }
-        })
+        .then((response) => this.sendAssistantResponse(message.from, response))
         .catch((error) => {
           console.error(`Assistant node failed to answer: ${error}`);
         });
       return;
     }
 
+    if (message.type === 'assistant-audio-query') {
+      console.log(`\n[${this.id}] Assistant audio query received from ${message.from}`);
+      this.aiService.answerAudio(message.payload as { mime: string; data: string })
+        .then((response) => this.sendAssistantResponse(message.from, response, 'audio-response'))
+        .catch((error) => {
+          console.error(`Assistant node failed to answer audio: ${error}`);
+        });
+      return;
+    }
+
     super.receive(message);
+  }
+
+  private sendAssistantResponse(to: string | undefined, response: string, type: MeshMessage['type'] = 'assistant-response') {
+    if (!to) {
+      return;
+    }
+
+    const responseMessage: MeshMessage = {
+      from: this.id,
+      to,
+      type,
+      payload: response,
+      timestamp: new Date().toISOString(),
+    };
+
+    if (this.network) {
+      this.network.send(responseMessage);
+    }
   }
 }

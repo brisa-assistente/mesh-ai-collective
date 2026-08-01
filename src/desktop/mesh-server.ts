@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { DesktopMeshNode, InMemoryMeshNetwork, type MeshNetworkEvent } from './mesh.js';
-import { MeshNode } from '../shared/types.js';
+import { type MeshMessage, type MeshNode } from '../shared/types.js';
 
 /**
  * Lightweight HTTP + WebSocket server that exposes a simple UI for the
@@ -95,7 +95,14 @@ export async function startWebInterface(
 
     socket.on('message', (data: WebSocket.Data) => {
       try {
-        const parsed = JSON.parse(data.toString()) as { type: 'send'; from: string; to: string; message: unknown };
+        const parsed = JSON.parse(data.toString()) as {
+          type: 'send';
+          from: string;
+          to: string;
+          message: unknown;
+          messageType?: string;
+        };
+
         if (parsed.type === 'send') {
           const node = nodes.find((nodeItem) => nodeItem.id === parsed.from);
           if (!node) {
@@ -103,7 +110,14 @@ export async function startWebInterface(
             return;
           }
 
-          const messageType = parsed.to === 'assistant-node-04' ? 'assistant-query' : 'command';
+          const allowedTypes: Array<MeshMessage['type']> = [
+            'command',
+            'assistant-query',
+            'assistant-audio-query',
+            'remote-command',
+          ];
+          const requestedType = (parsed.messageType as MeshMessage['type']) || 'command';
+          const messageType = allowedTypes.includes(requestedType) ? requestedType : 'command';
 
           node.send({
             from: parsed.from,
@@ -122,14 +136,17 @@ export async function startWebInterface(
   });
 
   network.on('message', (event: MeshNetworkEvent) => {
-    if (event.message.type === 'assistant-response') {
-      sendToClients({
-        event: 'assistant-response',
-        from: event.message.from,
-        to: event.message.to,
-        payload: event.message.payload,
-      });
+    if (event.event === 'outgoing' || event.event === 'delivered' || event.event === 'received') {
+      if (event.message.type === 'assistant-response') {
+        sendToClients({
+          event: 'assistant-response',
+          from: event.message.from,
+          to: event.message.to,
+          payload: event.message.payload,
+        });
+      }
     }
+
     sendToClients({ event: 'network', payload: event });
   });
 
@@ -169,15 +186,30 @@ function getHtml() {
   <div class="panel">
     <h1>Mesh AI Collective</h1>
     <p>Use a interface para enviar comandos para nós.</p>
+    <div style="margin-top:8px;">
+      <strong>Current Leader:</strong> <span id="leader" style="font-weight:600;color:#0066cc"></span>
+    </div>
     <label>From node
       <select id="fromNode"></select>
     </label>
     <label>To node
       <select id="toNode"></select>
     </label>
+    <label>Message Type
+      <select id="messageType">
+        <option value="command">Command</option>
+        <option value="assistant-query">Assistant Text Query</option>
+        <option value="assistant-audio-query">Assistant Audio Query</option>
+        <option value="remote-command">Remote Command</option>
+      </select>
+    </label>
     <label>Message
       <textarea id="message"></textarea>
     </label>
+    <div>
+      <button id="recordButton" type="button">Record Audio</button>
+      <button id="stopButton" type="button" disabled>Stop Recording</button>
+    </div>
     <button id="sendButton">Send Message</button>
     <div style="margin-top: 16px;">
       <h3>Assistant Response</h3>

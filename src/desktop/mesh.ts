@@ -10,7 +10,9 @@ export interface MeshNetwork {
 export type MeshNetworkEvent =
   | { event: 'outgoing'; message: MeshMessage }
   | { event: 'delivered'; message: MeshMessage }
-  | { event: 'received'; message: MeshMessage; nodeId: string };
+  | { event: 'received'; message: MeshMessage; nodeId: string }
+  | { event: 'leader-elected'; leaderId: string }
+  | { event: 'leader-lost'; leaderId: string };
 
 /**
  * In-memory mesh network implementation.
@@ -20,16 +22,38 @@ export type MeshNetworkEvent =
 export class InMemoryMeshNetwork extends EventEmitter implements MeshNetwork {
   [x: string]: any;
   private nodes = new Map<string, DesktopMeshNode>();
+  private heartbeatTimestamps = new Map<string, number>();
+  private currentLeaderId: string | null = null;
+  private readonly heartbeatTimeoutMs = 12000;
+  private readonly leaderElectionTimer: NodeJS.Timeout;
+
+  constructor() {
+    super();
+    this.leaderElectionTimer = setInterval(() => this.checkLeaderTimeout(), 5000);
+  }
 
   registerNode(node: DesktopMeshNode): void {
     this.nodes.set(node.id, node);
     node.network = this;
+
+    if (node.config.role === 'coordinator') {
+      this.heartbeatTimestamps.set(node.id, Date.now());
+      this.maybeElectLeader();
+    }
   }
 
   send(message: MeshMessage): void {
+    this.processHeartbeat(message);
+
     if (message.to) {
+      const source = this.nodes.get(message.from);
       const target = this.nodes.get(message.to);
       if (target) {
+        if (source && !this.isAllowed(source, target, message)) {
+          console.warn(`Mesh network: access denied from=${message.from} to=${message.to} message=${message.type}`);
+          return;
+        }
+
         this.emit('message', { event: 'outgoing', message });
         target.receive(message);
         this.emit('message', { event: 'delivered', message });
@@ -46,9 +70,91 @@ export class InMemoryMeshNetwork extends EventEmitter implements MeshNetwork {
     this.emit('message', { event: 'outgoing', message });
     for (const node of this.nodes.values()) {
       if (node.id !== message.from) {
+        const source = this.nodes.get(message.from);
+        if (source && !this.isAllowed(source, node, message)) {
+          continue;
+        }
         node.receive(message);
       }
     }
+  }
+
+  private isAllowed(sender: DesktopMeshNode, receiver: DesktopMeshNode, message: MeshMessage): boolean {
+    const policy = receiver.config.accessPolicy;
+    if (!policy) {
+      return true;
+    }
+
+    if (policy.allowedNodeIds && !policy.allowedNodeIds.includes(sender.id)) {
+      return false;
+    }
+
+    if (policy.allowedRoles && !policy.allowedRoles.includes(sender.config.role)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private processHeartbeat(message: MeshMessage): void {
+    if (message.type !== 'heartbeat') {
+      return;
+    }
+
+    this.heartbeatTimestamps.set(message.from, Date.now());
+    const node = this.nodes.get(message.from);
+    if (node?.config.role === 'coordinator') {
+      this.maybeElectLeader();
+    }
+  }
+
+  private checkLeaderTimeout(): void {
+    if (!this.currentLeaderId) {
+      this.maybeElectLeader();
+      return;
+    }
+
+    const lastSeen = this.heartbeatTimestamps.get(this.currentLeaderId);
+    if (!lastSeen || Date.now() - lastSeen > this.heartbeatTimeoutMs) {
+      const lostLeader = this.currentLeaderId;
+      this.currentLeaderId = null;
+      this.emit('message', { event: 'leader-lost', leaderId: lostLeader });
+      this.maybeElectLeader();
+    }
+  }
+
+  private maybeElectLeader(): void {
+    const coordinators = [...this.nodes.values()].filter(
+      (node) => node.config.role === 'coordinator' && this.isAlive(node.id),
+    );
+
+    if (coordinators.length === 0) {
+      return;
+    }
+
+    coordinators.sort((a, b) => {
+      const priorityA = a.config.leadershipPriority ?? 0;
+      const priorityB = b.config.leadershipPriority ?? 0;
+      if (priorityA !== priorityB) {
+        return priorityB - priorityA;
+      }
+      return a.id.localeCompare(b.id);
+    });
+
+    const elected = coordinators[0];
+    if (elected.id !== this.currentLeaderId) {
+      this.currentLeaderId = elected.id;
+      this.emit('message', { event: 'leader-elected', leaderId: elected.id });
+    }
+  }
+
+  private isAlive(nodeId: string): boolean {
+    const lastSeen = this.heartbeatTimestamps.get(nodeId);
+    return typeof lastSeen === 'number' && Date.now() - lastSeen <= this.heartbeatTimeoutMs;
+  }
+
+  getCurrentLeaderId(): string | null {
+    return this.currentLeaderId;
   }
 }
 
@@ -101,11 +207,14 @@ export class DesktopMeshNode {
   }
 
   startHeartbeat(interval = 5000): void {
-    setInterval(() => {
+    const sendHeartbeat = () => {
       const heartbeat = this.createHeartbeat();
       console.log(`\n[${this.id}] Sending heartbeat`);
       this.send(heartbeat);
-    }, interval);
+    };
+
+    sendHeartbeat();
+    setInterval(sendHeartbeat, interval);
   }
 
   sendTask(taskDetails: unknown, to: string): void {
